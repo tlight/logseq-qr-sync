@@ -1,0 +1,20 @@
+{
+  "name": "logseq-qr-sync",
+  "version": "1.1.0",
+  "description": "Air-gapped note sync via QR code slideshow",
+  "main": "dist/main.js",
+  "logseq": {
+    "id": "qr-sync-plugin",
+    "title": "QR Slideshow Sync"
+  },
+  "scripts": {
+    "build": "esbuild index.js --bundle --outfile=dist/main.js --format=esm"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "qrcode": "^1.5.3"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  }
+}
