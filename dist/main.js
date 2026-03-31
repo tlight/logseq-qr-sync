@@ -4852,43 +4852,60 @@ var clearSync = () => {
     window.qrInterval = null;
   }
 };
+function parseDateFromTitle(title) {
+  if (!title)
+    return null;
+  const match = title.match(/^(\d{4}-?\d{2}-?\d{2})/);
+  if (!match)
+    return null;
+  const dateStr = match[1].replace(/-/g, "");
+  const year = parseInt(dateStr.substring(0, 4));
+  const month = parseInt(dateStr.substring(4, 6)) - 1;
+  const day = parseInt(dateStr.substring(6, 8));
+  return new Date(year, month, day);
+}
 async function startTransmission(daysToSync = 365) {
   clearSync();
   const zip = new import_jszip.default();
-  const now = Date.now();
-  const syncWindow = daysToSync * 24 * 60 * 60 * 1e3;
+  const now = /* @__PURE__ */ new Date();
+  const statusEl = parent.document.getElementById("qr-status");
   try {
     const allPages = await logseq.Editor.getAllPages();
     let fileCount = 0;
-    if (!allPages || allPages.length === 0) {
-      logseq.App.showMsg("No pages found in this graph.", "warning");
+    if (!allPages)
       return;
-    }
-    const statusEl = parent.document.getElementById("qr-status");
     if (statusEl)
-      statusEl.innerText = "Scanning graph files...";
+      statusEl.innerText = "Filtering by filename...";
     for (const p of allPages) {
-      const page = await logseq.Editor.getPage(p.name);
-      if (page && page.file) {
-        const mtime = page.updatedAt || page["updated-at"] || 0;
-        const isWithinWindow = mtime === 0 || now - mtime < syncWindow;
-        if (isWithinWindow) {
+      const fileName = p.originalName || p.name;
+      const fileDate = parseDateFromTitle(fileName);
+      let shouldInclude = false;
+      if (!fileDate) {
+        shouldInclude = true;
+      } else {
+        const diffTime = Math.abs(now - fileDate);
+        const diffDays = Math.ceil(diffTime / (1e3 * 60 * 60 * 24));
+        if (diffDays <= daysToSync) {
+          shouldInclude = true;
+        }
+      }
+      if (shouldInclude) {
+        const page = await logseq.Editor.getPage(p.name);
+        if (page && page.file) {
           try {
             const rawContent = await logseq.FileStorage.getItem(page.file.path);
             if (rawContent) {
-              const fileName = page.originalName || page.name;
               zip.file(`${fileName}.md`, rawContent);
               fileCount++;
             }
-          } catch (err) {
-            console.warn(`Could not read file at ${page.file.path}`, err);
+          } catch (e) {
+            console.error("Read error:", fileName, e);
           }
         }
       }
     }
     if (fileCount === 0) {
-      if (statusEl)
-        statusEl.innerText = `No files modified in the last ${daysToSync} days.`;
+      statusEl.innerText = "No files matched that date range.";
       return;
     }
     const blob = await zip.generateAsync({ type: "uint8array" });
@@ -4906,36 +4923,25 @@ async function startTransmission(daysToSync = 365) {
       const chunk = blob.slice(start, end);
       const header = `${current}/${total}|`;
       const payload = new Uint8Array(header.length + chunk.length);
-      for (let i = 0; i < header.length; i++) {
+      for (let i = 0; i < header.length; i++)
         payload[i] = header.charCodeAt(i);
-      }
       payload.set(chunk, header.length);
       import_qrcode.default.toCanvas(canvas, [{ data: payload, mode: "byte" }], {
         width: 420,
         margin: 4,
         errorCorrectionLevel: "L"
-      }, (err) => {
-        if (err)
-          console.error("QR Render Error:", err);
       });
-      if (statusEl) {
-        statusEl.innerText = `Part ${current + 1} of ${total} (${fileCount} files)`;
-      }
+      statusEl.innerText = `Part ${current + 1} of ${total} (${fileCount} files)`;
       current = (current + 1) % total;
     }, 500);
   } catch (e) {
-    logseq.App.showMsg("Sync Error: " + e.message, "error");
-    console.error("Transmission Error:", e);
+    logseq.App.showMsg("Error: " + e.message, "error");
   }
 }
 function main() {
   logseq.App.registerUIItem("toolbar", {
-    key: "qr-sync-tool-v3",
-    template: `
-            <a class="button" data-on-click="launch_sync" title="QR Sync (Raw Files)">
-                <span style="font-size: 1.2em; filter: grayscale(1);">\u{1F4F2}</span>
-            </a>
-        `
+    key: "qr-sync-v5",
+    template: `<a class="button" data-on-click="launch_sync"><span style="font-size: 1.2em;">\u{1F4F2}</span></a>`
   });
   logseq.provideModel({
     launch_sync() {
@@ -4944,37 +4950,26 @@ function main() {
         path: "#app-container",
         template: `
                     <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-                                background: rgba(0,0,0,0.92); z-index: 9999; display: flex; 
+                                background: rgba(0,0,0,0.9); z-index: 9999; display: flex; 
                                 flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif;">
-                        <div style="background: white; padding: 30px; border-radius: 24px; text-align: center; width: 460px; box-shadow: 0 20px 40px rgba(0,0,0,0.4);">
-                            <canvas id="qr-canvas" style="display: block; margin: 0 auto; background: white; border-radius: 8px;"></canvas>
-                            
-                            <div style="margin: 20px 0; padding: 12px; background: #f8f9fa; border-radius: 12px; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                                <span style="color: #666; font-size: 0.85em; font-weight: bold;">WINDOW (DAYS):</span>
-                                <input type="number" id="sync-days-input" value="365" 
-                                       style="width: 70px; text-align: center; border: 1px solid #ddd; border-radius: 6px; padding: 6px; font-weight: bold;" />
-                                <button data-on-click="refresh_sync" 
-                                        style="padding: 6px 12px; background: #007aff; color: white; border: none; border-radius: 6px; cursor: pointer; font-size: 0.85em;">
-                                    UPDATE
-                                </button>
+                        <div style="background: white; padding: 30px; border-radius: 20px; text-align: center; width: 440px;">
+                            <canvas id="qr-canvas" style="display: block; margin: 0 auto;"></canvas>
+                            <div style="margin: 15px 0; padding: 10px; background: #f0f0f0; border-radius: 10px;">
+                                <span style="font-size: 0.8em; font-weight: bold; color: #555;">SYNC RECENT JOURNALS (DAYS)</span><br/>
+                                <input type="number" id="sync-days-input" value="7" style="width: 60px; text-align: center;" />
+                                <button data-on-click="refresh_sync">Update</button>
                             </div>
-
-                            <div id="qr-status" style="color: #333; margin-bottom: 20px; font-weight: bold; font-size: 1.1em;">Preparing...</div>
-                            
-                            <button data-on-click="close_sync_overlay" 
-                                    style="padding: 12px 30px; background: #ff3b30; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%;">
-                                CLOSE
-                            </button>
+                            <div id="qr-status" style="font-weight: bold; margin-bottom: 15px;">Ready...</div>
+                            <button data-on-click="close_sync_overlay" style="background: #ff3b30; color: white; border: none; padding: 10px 20px; border-radius: 8px;">CLOSE</button>
                         </div>
                     </div>
                 `
       });
-      setTimeout(() => startTransmission(365), 200);
+      setTimeout(() => startTransmission(7), 200);
     },
     refresh_sync() {
       const input = parent.document.getElementById("sync-days-input");
-      const days = parseInt(input.value) || 365;
-      startTransmission(days);
+      startTransmission(parseInt(input.value) || 7);
     },
     close_sync_overlay() {
       clearSync();
