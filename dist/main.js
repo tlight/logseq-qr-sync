@@ -4864,12 +4864,17 @@ async function startTransmission(daysToSync = 7) {
       throw new Error("Could not access Logseq pages.");
     for (const page of pages) {
       if (page.updatedAt && now - page.updatedAt < syncWindow) {
-        const blocks = await logseq.Editor.getPageBlocksTree(page.name);
-        if (blocks && blocks.length > 0) {
-          const content = blocks.map((b) => b.content).filter((c) => c !== void 0).join("\n\n");
-          const fileName = page.originalName || page.name;
-          zip.file(`${fileName}.md`, content);
-          fileCount++;
+        if (page.path) {
+          try {
+            const rawContent = await logseq.FileStorage.getItem(page.path);
+            if (rawContent) {
+              const fileName = page.originalName || page.name;
+              zip.file(`${fileName}.md`, rawContent);
+              fileCount++;
+            }
+          } catch (fileErr) {
+            console.warn(`Could not read file: ${page.path}`, fileErr);
+          }
         }
       }
     }
