@@ -4862,7 +4862,22 @@ function parseDateFromTitle(title) {
   const year = parseInt(dateStr.substring(0, 4));
   const month = parseInt(dateStr.substring(4, 6)) - 1;
   const day = parseInt(dateStr.substring(6, 8));
-  return new Date(year, month, day);
+  const parsed = new Date(year, month, day);
+  return isNaN(parsed.getTime()) ? null : parsed;
+}
+function blocksToMarkdown(blocks, depth = 0) {
+  if (!blocks || blocks.length === 0)
+    return "";
+  return blocks.map((block) => {
+    const content = block.content || "";
+    const indent = "  ".repeat(depth);
+    let result = `${indent}- ${content}`;
+    if (block.children && block.children.length > 0) {
+      const childMarkdown = blocksToMarkdown(block.children, depth + 1);
+      result += "\n" + childMarkdown;
+    }
+    return result;
+  }).join("\n");
 }
 async function startTransmission(daysToSync = 365) {
   clearSync();
@@ -4871,11 +4886,11 @@ async function startTransmission(daysToSync = 365) {
   const statusEl = parent.document.getElementById("qr-status");
   try {
     const allPages = await logseq.Editor.getAllPages();
-    let fileCount = 0;
     if (!allPages)
       return;
+    let fileCount = 0;
     if (statusEl)
-      statusEl.innerText = "Filtering by filename...";
+      statusEl.innerText = `Filtering ${allPages.length} pages...`;
     for (const p of allPages) {
       const fileName = p.originalName || p.name;
       const fileDate = parseDateFromTitle(fileName);
@@ -4885,27 +4900,21 @@ async function startTransmission(daysToSync = 365) {
       } else {
         const diffTime = Math.abs(now - fileDate);
         const diffDays = Math.ceil(diffTime / (1e3 * 60 * 60 * 24));
-        if (diffDays <= daysToSync) {
+        if (diffDays <= daysToSync)
           shouldInclude = true;
-        }
       }
       if (shouldInclude) {
-        const page = await logseq.Editor.getPage(p.name);
-        if (page && page.file) {
-          try {
-            const rawContent = await logseq.FileStorage.getItem(page.file.path);
-            if (rawContent) {
-              zip.file(`${fileName}.md`, rawContent);
-              fileCount++;
-            }
-          } catch (e) {
-            console.error("Read error:", fileName, e);
-          }
+        const blocks = await logseq.Editor.getPageBlocksTree(p.name);
+        if (blocks && blocks.length > 0) {
+          const markdown = blocksToMarkdown(blocks);
+          zip.file(`${fileName}.md`, markdown);
+          fileCount++;
         }
       }
     }
     if (fileCount === 0) {
-      statusEl.innerText = "No files matched that date range.";
+      if (statusEl)
+        statusEl.innerText = "No files matched that range.";
       return;
     }
     const blob = await zip.generateAsync({ type: "uint8array" });
@@ -4931,17 +4940,18 @@ async function startTransmission(daysToSync = 365) {
         margin: 4,
         errorCorrectionLevel: "L"
       });
-      statusEl.innerText = `Part ${current + 1} of ${total} (${fileCount} files)`;
+      if (statusEl)
+        statusEl.innerText = `Part ${current + 1} of ${total} (${fileCount} files)`;
       current = (current + 1) % total;
     }, 500);
   } catch (e) {
-    logseq.App.showMsg("Error: " + e.message, "error");
+    logseq.App.showMsg("Sync Error: " + e.message, "error");
   }
 }
 function main() {
   logseq.App.registerUIItem("toolbar", {
-    key: "qr-sync-v5",
-    template: `<a class="button" data-on-click="launch_sync"><span style="font-size: 1.2em;">\u{1F4F2}</span></a>`
+    key: "qr-sync-v9-final",
+    template: `<a class="button" data-on-click="launch_sync">\u{1F4F2}</a>`
   });
   logseq.provideModel({
     launch_sync() {
@@ -4949,18 +4959,16 @@ function main() {
         key: "qr-sync-overlay",
         path: "#app-container",
         template: `
-                    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; 
-                                background: rgba(0,0,0,0.9); z-index: 9999; display: flex; 
-                                flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif;">
-                        <div style="background: white; padding: 30px; border-radius: 20px; text-align: center; width: 440px;">
-                            <canvas id="qr-canvas" style="display: block; margin: 0 auto;"></canvas>
+                    <div style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0,0,0,0.92); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; font-family: sans-serif;">
+                        <div style="background: white; padding: 30px; border-radius: 20px; text-align: center; width: 440px; box-shadow: 0 10px 30px rgba(0,0,0,0.5);">
+                            <canvas id="qr-canvas" style="display: block; margin: 0 auto; background: white; border-radius: 8px;"></canvas>
                             <div style="margin: 15px 0; padding: 10px; background: #f0f0f0; border-radius: 10px;">
-                                <span style="font-size: 0.8em; font-weight: bold; color: #555;">SYNC RECENT JOURNALS (DAYS)</span><br/>
-                                <input type="number" id="sync-days-input" value="7" style="width: 60px; text-align: center;" />
-                                <button data-on-click="refresh_sync">Update</button>
+                                <span style="font-size: 0.8em; font-weight: bold; color: #555;">SYNC JOURNALS (DAYS)</span><br/>
+                                <input type="number" id="sync-days-input" value="7" style="width: 60px; text-align: center; border: 1px solid #ccc; border-radius: 4px;" />
+                                <button data-on-click="refresh_sync" style="margin-left: 5px; cursor: pointer;">Update</button>
                             </div>
-                            <div id="qr-status" style="font-weight: bold; margin-bottom: 15px;">Ready...</div>
-                            <button data-on-click="close_sync_overlay" style="background: #ff3b30; color: white; border: none; padding: 10px 20px; border-radius: 8px;">CLOSE</button>
+                            <div id="qr-status" style="color: #333; margin: 15px 0; font-weight: bold;">Initialising...</div>
+                            <button data-on-click="close_sync_overlay" style="padding: 10px 20px; background: #ff3b30; color: white; border: none; border-radius: 8px; cursor: pointer; width: 100%;">CLOSE</button>
                         </div>
                     </div>
                 `
