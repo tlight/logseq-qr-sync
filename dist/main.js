@@ -4852,36 +4852,43 @@ var clearSync = () => {
     window.qrInterval = null;
   }
 };
-async function startTransmission(daysToSync = 7) {
+async function startTransmission(daysToSync = 365) {
   clearSync();
   const zip = new import_jszip.default();
   const now = Date.now();
   const syncWindow = daysToSync * 24 * 60 * 60 * 1e3;
   try {
-    const pages = await logseq.Editor.getAllPages();
+    const allPages = await logseq.Editor.getAllPages();
     let fileCount = 0;
-    if (!pages)
-      throw new Error("Could not access Logseq pages.");
-    for (const page of pages) {
-      if (page.updatedAt && now - page.updatedAt < syncWindow) {
-        if (page.path) {
+    if (!allPages || allPages.length === 0) {
+      logseq.App.showMsg("No pages found in this graph.", "warning");
+      return;
+    }
+    const statusEl = parent.document.getElementById("qr-status");
+    if (statusEl)
+      statusEl.innerText = "Scanning graph files...";
+    for (const p of allPages) {
+      const page = await logseq.Editor.getPage(p.name);
+      if (page && page.file) {
+        const mtime = page.updatedAt || page["updated-at"] || 0;
+        const isWithinWindow = mtime === 0 || now - mtime < syncWindow;
+        if (isWithinWindow) {
           try {
-            const rawContent = await logseq.FileStorage.getItem(page.path);
+            const rawContent = await logseq.FileStorage.getItem(page.file.path);
             if (rawContent) {
               const fileName = page.originalName || page.name;
               zip.file(`${fileName}.md`, rawContent);
               fileCount++;
             }
-          } catch (fileErr) {
-            console.warn(`Could not read file: ${page.path}`, fileErr);
+          } catch (err) {
+            console.warn(`Could not read file at ${page.file.path}`, err);
           }
         }
       }
     }
-    const statusEl = parent.document.getElementById("qr-status");
     if (fileCount === 0) {
       if (statusEl)
-        statusEl.innerText = `No files found in last ${daysToSync} days.`;
+        statusEl.innerText = `No files modified in the last ${daysToSync} days.`;
       return;
     }
     const blob = await zip.generateAsync({ type: "uint8array" });
@@ -4907,7 +4914,6 @@ async function startTransmission(daysToSync = 7) {
         width: 420,
         margin: 4,
         errorCorrectionLevel: "L"
-        // 'Low' allows for larger, chunkier pixels
       }, (err) => {
         if (err)
           console.error("QR Render Error:", err);
@@ -4919,14 +4925,14 @@ async function startTransmission(daysToSync = 7) {
     }, 500);
   } catch (e) {
     logseq.App.showMsg("Sync Error: " + e.message, "error");
-    console.error(e);
+    console.error("Transmission Error:", e);
   }
 }
 function main() {
   logseq.App.registerUIItem("toolbar", {
-    key: "qr-sync-btn-v2",
+    key: "qr-sync-tool-v3",
     template: `
-            <a class="button" data-on-click="launch_sync" title="Sync via QR">
+            <a class="button" data-on-click="launch_sync" title="QR Sync (Raw Files)">
                 <span style="font-size: 1.2em; filter: grayscale(1);">\u{1F4F2}</span>
             </a>
         `
@@ -4953,7 +4959,7 @@ function main() {
                                 </button>
                             </div>
 
-                            <div id="qr-status" style="color: #333; margin-bottom: 20px; font-weight: bold; font-size: 1.1em;">Initializing...</div>
+                            <div id="qr-status" style="color: #333; margin-bottom: 20px; font-weight: bold; font-size: 1.1em;">Preparing...</div>
                             
                             <button data-on-click="close_sync_overlay" 
                                     style="padding: 12px 30px; background: #ff3b30; color: white; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%;">
@@ -4963,11 +4969,11 @@ function main() {
                     </div>
                 `
       });
-      setTimeout(() => startTransmission(7), 200);
+      setTimeout(() => startTransmission(365), 200);
     },
     refresh_sync() {
       const input = parent.document.getElementById("sync-days-input");
-      const days = parseInt(input.value) || 7;
+      const days = parseInt(input.value) || 365;
       startTransmission(days);
     },
     close_sync_overlay() {
